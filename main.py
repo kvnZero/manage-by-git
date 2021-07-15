@@ -1,5 +1,8 @@
+import getpass
 from abc import ABCMeta, abstractmethod, ABC
 from builtins import list
+from datetime import datetime
+
 import redis
 import json
 import os
@@ -62,14 +65,21 @@ class Log:
 class Record:
     deadline: str
     author: str
-    status: str
-    record: str
+    status: bool
+    record: dict
     title: str
-    logs: list
+    logs: list = []
     code: str
 
-    def __init__(self, record_data: str):
+    def __init__(self, record_data: dict):
         self.record = record_data
+        self.format_log()
+
+    def format_log(self):
+        self.deadline = self.record['deadline']
+        self.author = self.record['author']
+        self.title = self.record['title']
+        self.code = self.record['code']
 
     def get_deadline(self) -> str:
         return self.deadline
@@ -77,7 +87,7 @@ class Record:
     def get_author(self) -> str:
         return self.author
 
-    def get_status(self) -> str:
+    def get_status(self) -> bool:
         return self.status
 
     def get_title(self) -> str:
@@ -98,6 +108,7 @@ class Record:
 
     def add_log(self, log_obj: Log):
         self.logs.append(log_obj)
+        self.status = True
 
     def get_record(self) -> dict:
         return {"deadline": self.deadline, "author": self.author, "status": self.status, "title": self.title,
@@ -115,7 +126,7 @@ class Manage:
     def handle(self) -> list:
         for record in self.records:
             for log in self.logs:
-                if record.match_log(log):
+                if record.match_log(log.get_info()):
                     record.add_log(log)
         return self.records
 
@@ -150,6 +161,7 @@ class Redis(OStream, ABC):
         return json.loads(self.redis.hget(self.key, id))
 
     def set(self, id: str, data: dict) -> bool:
+        print(data)
         return self.redis.hset(self.key, id, json.dumps(data))
 
     def delete(self, id: str) -> bool:
@@ -165,33 +177,70 @@ class Redis(OStream, ABC):
 app = typer.Typer()
 
 
-@app.command(name="list", help="获取任务列表情况")
+@app.command(name="list")
 def list(path: str = ""):
+    """
+    List By Work Status
+    """
     if len(path) == 0:
         path = os.path.split(os.path.realpath(__file__))[0]
-    gitlog = GitLog(path)
-    log = gitlog.log()
-    if len(log) == 0:
+
+    records = Redis().all()
+    logs = GitLog(path).log()
+    if len(logs) == 0:
         typer.echo("this path not as git repository")
 
+    logList = []
+    recordList = []
+    for log in logs:
+        logList.append(Log(log))
+    for code in records:
+        recordList.append(Record(records[code]))
+
+    manage = Manage(logList, recordList)
+    result = manage.handle()
+    for record in result:
+        print(record.get_record())
 
 
-
-
-@app.command(name="set", help="设置任务列表")
-def set(code: str, title: str, author: str = "", status: str = "", deadline: str = ""):
+@app.command(name="set")
+def set(
+        code: str = typer.Option(..., prompt=True, help="Work Key, find to git log key"),
+        title: str = typer.Option(...,
+                                  prompt=True,
+                                  help="Work Title, if cannot find key by log after will use title find"),
+        author: str = typer.Option(getpass.getuser(), prompt=True, help="work author"),
+        deadline: datetime = typer.Option(
+            default=datetime.today().strftime("%Y-%m-%d %H:%M:%S"),
+            prompt=True,
+            formats=["%Y-%m-%d %H:%M:%S"],
+            help="work deadline"
+        ),
+):
+    """
+    Create a new Work
+    """
     redis = Redis()
     bool = redis.set(code, {
         "title": title,
         "code": code,
         "author": author,
-        "status": status,
-        "deadline": deadline
+        "deadline": deadline.strftime("%Y-%m-%d %H:%M:%S")
     })
+    message_start = "add work: "
     if bool:
-        typer.echo("add work: success ✅")
+        ending = typer.style("✅ Success", fg=typer.colors.GREEN)
     else:
-        typer.echo("add work: fail ❌")
+        ending = typer.style("❌ Fail: the work already exists (or not redis conn)", fg=typer.colors.RED)
+    typer.echo(message_start + ending)
+
+@app.callback()
+def callback():
+    """
+    Manage work CLI app.
+
+    Use it manage work
+    """
 
 
 if __name__ == '__main__':
