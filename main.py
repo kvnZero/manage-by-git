@@ -161,7 +161,6 @@ class Redis(OStream, ABC):
         return json.loads(self.redis.hget(self.key, id))
 
     def set(self, id: str, data: dict) -> bool:
-        print(data)
         return self.redis.hset(self.key, id, json.dumps(data))
 
     def delete(self, id: str) -> bool:
